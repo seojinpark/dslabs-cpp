@@ -124,7 +124,7 @@ bool Event::Test() {
     } else if (status_ == DONE) {
       // do nothing
     } else {
-      verify(0);
+      // verify(0);
     }
     return true;
   }

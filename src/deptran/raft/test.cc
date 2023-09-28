@@ -608,11 +608,14 @@ int RaftLabTest::testFigure8(void) {
             "value 1101 is not committed at index %ld when it should be", index1);
     success = true;
     // Reconnect all servers
-    config_->Reconnect((leader1 + 3) % NSERVERS);
-    if (leader2 == leader1 + 1)
-      config_->Reconnect((leader1 + 1) % NSERVERS);
-    else
-      config_->Reconnect((leader1 + 2) % NSERVERS);
+    for (int i = 0; i < NSERVERS; i++) {
+      config_->Reconnect(i);
+    }
+    // config_->Reconnect((leader1 + 3) % NSERVERS);
+    // if (leader2 == leader1 + 1)
+    //   config_->Reconnect((leader1 + 1) % NSERVERS);
+    // else
+    //   config_->Reconnect((leader1 + 2) % NSERVERS);
     break;
   }
   Assert2(success, "Failed to test figure 8");

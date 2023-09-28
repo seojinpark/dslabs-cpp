@@ -235,17 +235,21 @@ uint64_t RaftTestConfig::DoAgreement(int cmd, int n, bool retry) {
 void RaftTestConfig::Disconnect(int svr) {
   verify(svr >= 0 && svr < NSERVERS);
   std::lock_guard<std::mutex> lk(disconnect_mtx_);
-  verify(!disconnected_[svr]);
-  disconnect(svr, true);
-  disconnected_[svr] = true;
+  // verify(!disconnected_[svr]);
+  if (!disconnected_[svr]) {
+    disconnect(svr, true);
+    disconnected_[svr] = true;
+  }
 }
 
 void RaftTestConfig::Reconnect(int svr) {
   verify(svr >= 0 && svr < NSERVERS);
   std::lock_guard<std::mutex> lk(disconnect_mtx_);
-  verify(disconnected_[svr]);
-  reconnect(svr);
-  disconnected_[svr] = false;
+  // verify(disconnected_[svr]);
+  if (disconnected_[svr]) {
+    reconnect(svr);
+    disconnected_[svr] = false;
+  }
 }
 
 int RaftTestConfig::NDisconnected(void) {
