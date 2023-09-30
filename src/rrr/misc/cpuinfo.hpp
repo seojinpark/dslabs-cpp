@@ -1,4 +1,5 @@
 #pragma once
+#include "../base/all.hpp"
 
 #include "stdlib.h"
 #include "stdio.h"

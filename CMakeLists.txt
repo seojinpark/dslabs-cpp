@@ -8,10 +8,8 @@ include("HunterGate.cmake")
 if(UNIX AND NOT APPLE)
     # Linux
     HunterGate(
-#            URL "https://github.com/cpp-pm/hunter/archive/v0.23.242.tar.gz"
-#            SHA1 "503b149d0ebdbc598e498f1669ae828a2136b838"
-            URL "https://github.com/cpp-pm/hunter/archive/v0.23.254.tar.gz"
-            SHA1 "017e688b9848c1f695303e8cfe9f35d40e154112"
+            URL "https://github.com/cpp-pm/hunter/archive/v0.24.7.tar.gz"
+            SHA1 "908ddcb223f25fa155315baae64ce0ab48a38bf7"
             #        "${CMAKE_CURRENT_LIST_DIR}/cxx11.cmake"
             #        FILEPATH "/home/shuai/git/janus/config.cmake"
             LOCAL
@@ -46,12 +44,12 @@ pkg_check_modules(PYTHON REQUIRED python3)
 
 hunter_add_package(Boost COMPONENTS system filesystem coroutine context thread)
 hunter_add_package(GTest)
-#hunter_add_package(GSL)
+# hunter_add_package(GSL)
 
 find_package(Boost CONFIG REQUIRED
         system filesystem coroutine context thread)
 find_package(GTest CONFIG REQUIRED)
-#find_package(GSL CONFIG REQUIRED)
+# find_package(GSL CONFIG REQUIRED)
 
 include_directories(
         ${Boost_INCLUDE_DIRS}
@@ -135,6 +133,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDB_CHECKSUM")
 #pkg_check_modules(PROFILER REQUIRED libprofiler)
 
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDEBUG_CODE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DRAFT_TEST_CORO")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDEBUG_CHECK")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEVENT_TIMEOUT_CHECK")
 set(CMAKE_CXX_FLAGS_RELEASE  "${CMAKE_CXX_FLAGS_RELEASE} -DLOG_LEVEL_AS_INFO")
@@ -215,6 +214,8 @@ file(GLOB BENCH_SRC
 )
 
 file(GLOB DEPTRAN_SRC
+    "src/kv/*.h"
+    "src/kv/*.cc"
     "src/deptran/*.h"
     "src/deptran/*.cc"
     "src/deptran/*/*.cc"
@@ -307,9 +308,9 @@ target_link_libraries(
 target_link_libraries(
         TEST
         RRR
-#        GTest::main
-#        GTest::gtest
-#        GSL:gsl
+        # GTest::main
+        GTest::gtest
+        # GSL:gsl
         ${Boost_LIBRARIES}
 #        ${CONAN_LIBS}
         ${CMAKE_THREAD_LIBS_INIT}
