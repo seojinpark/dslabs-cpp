@@ -1,0 +1,69 @@
+From e9f5f6367e726e739498100fbdbcdd2b87f1b6a7 Mon Sep 17 00:00:00 2001
+From: Yibo Yan <yiboyan@usc.edu>
+Date: Thu, 12 Oct 2023 23:01:59 -0700
+Subject: [PATCH] fix idx issue
+
+---
+ loop_test.sh              | 17 +++++++++++++++++
+ src/deptran/raft/frame.cc | 20 ++++++++++++++++----
+ 2 files changed, 33 insertions(+), 4 deletions(-)
+ create mode 100755 loop_test.sh
+
+diff --git a/loop_test.sh b/loop_test.sh
+new file mode 100755
+index 0000000..e04a4db
+--- /dev/null
++++ b/loop_test.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++
++if [ "$#" -lt 1 ]; then
++    echo "Usage: $0 command [arguments]"
++    exit 1
++fi
++
++CMD="$@"
++
++COUNT=0
++while stdbuf -o0 $CMD; do
++    ((COUNT++))
++    echo -e "Command has been executed successfully $COUNT times\n"
++done
++
++# Output when command fails
++echo "Command failed on attempt #$COUNT"
+diff --git a/src/deptran/raft/frame.cc b/src/deptran/raft/frame.cc
+index 894ed32..583c445 100644
+--- a/src/deptran/raft/frame.cc
++++ b/src/deptran/raft/frame.cc
+@@ -95,11 +95,23 @@ TxLogServer *RaftFrame::CreateScheduler() {
+   }
+   Log_debug("create new fpga raft sched loc: %d", this->site_info_->locale_id);
+ 
++
+ #ifdef RAFT_TEST_CORO
+-  raft_test_mutex_.lock();
+-  verify(n_replicas_ < 5);
+-  replicas_[n_replicas_++] = this;
+-  raft_test_mutex_.unlock();
++  while (true)
++  {
++    raft_test_mutex_.lock();
++    verify(n_replicas_ < 5);
++
++    if (this->site_info_->id != n_replicas_) {
++      raft_test_mutex_.unlock();
++      sleep(0.1);
++      continue;
++    }
++
++    replicas_[n_replicas_++] = this;
++    raft_test_mutex_.unlock();
++    break;
++  }
+ #endif
+ 
+   return svr_ ;
+-- 
+2.34.1
+
