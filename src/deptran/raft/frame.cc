@@ -95,11 +95,23 @@ TxLogServer *RaftFrame::CreateScheduler() {
   }
   Log_debug("create new fpga raft sched loc: %d", this->site_info_->locale_id);
 
+
 #ifdef RAFT_TEST_CORO
-  raft_test_mutex_.lock();
-  verify(n_replicas_ < 5);
-  replicas_[n_replicas_++] = this;
-  raft_test_mutex_.unlock();
+  while (true)
+  {
+    raft_test_mutex_.lock();
+    verify(n_replicas_ < 5);
+
+    if (this->site_info_->id != n_replicas_) {
+      raft_test_mutex_.unlock();
+      sleep(0.1);
+      continue;
+    }
+
+    replicas_[n_replicas_++] = this;
+    raft_test_mutex_.unlock();
+    break;
+  }
 #endif
 
   return svr_ ;
