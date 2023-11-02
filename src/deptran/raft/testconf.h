@@ -44,7 +44,8 @@ class CommitIndex {
 class RaftTestConfig {
 
  private:
-  static RaftFrame **replicas;
+  // static RaftFrame **replicas;
+  static map<siteid_t, RaftFrame*> frames;
   static std::function<void(Marshallable &)> commit_callbacks[NSERVERS];
   static std::vector<int> committed_cmds[NSERVERS];
   static uint64_t rpc_count_last[NSERVERS];
@@ -55,7 +56,23 @@ class RaftTestConfig {
   std::mutex disconnect_mtx_;
 
  public:
-  RaftTestConfig(RaftFrame **replicas);
+  RaftTestConfig(map<siteid_t, RaftFrame*>& frames);
+
+  void Restart(int svr) {
+    return frames[svr]->Restart();
+  }
+
+  KvServer* GetKvServer(int svr) {
+    return frames[svr]->kv_svr_;
+  }
+
+  ShardKvServer* GetShardKvServer(int svr) {
+    return frames[svr]->shardkv_svr_;
+  }
+
+  ShardMasterServiceImpl* GetShardMasterServer(int svr) {
+    return frames[svr]->sm_svr_;
+  }
 
   // sets up learner action functions for the servers
   // so that each committed command on each server is
@@ -78,9 +95,18 @@ class RaftTestConfig {
   // -1 if there's disagreement
   uint64_t OneTerm(void);
 
+  // Maximum log size across all servers
+  int GetLogSize(void);
+  
+  // Maximum snapshot size across all servers
+  int GetSnapshotSize(void);
+
   // Returns number of servers that think log entry at index is committed.
   // Checks if the committed value for index is the same across servers.
   int NCommitted(uint64_t index);
+
+  //Returns loc id of replica at index idx  
+  uint64_t getLocId(uint64_t idx);
 
   // Calls Start() to specified server
   bool Start(int svr, int cmd, uint64_t *index, uint64_t *term);
@@ -101,7 +127,7 @@ class RaftTestConfig {
   // If retry == true, Retries the agreement until at most 10 seconds pass.
   // Returns index of committed agreement on success, 0 on error.
   uint64_t DoAgreement(int cmd, int n, bool retry);
-
+  
   // Disconnects server from rest of servers
   void Disconnect(int svr);
 

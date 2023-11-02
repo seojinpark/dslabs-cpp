@@ -27,3 +27,4 @@ host:
 lab:
   raft: true
   kv: false
+  shard: false

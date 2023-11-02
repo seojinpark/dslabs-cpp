@@ -7,6 +7,9 @@
 #include "communicator.h"
 #include "../kv/server.h"
 #include "../kv/service.h"
+#include "../shardkv/server.h"
+#include "../shardkv/service.h"
+#include "../shardmaster/service.h"
 
 namespace janus {
 
@@ -35,6 +38,74 @@ void ServerWorker::SetupHeartbeat() {
            this->site_info_->name.c_str(), addr_port.c_str());
 }
 
+void ServerWorker::RestartScheduler() {
+  Log_info("Restarting scheduler of %d", site_info_->id);
+
+  // Shutdown old replication scheduler
+  auto old_rep_sched_ = rep_sched_;
+  rep_sched_->Shutdown();
+
+  // Recreate replication scheduler
+  auto config = Config::GetConfig();
+  if (config->IsReplicated() && config->replica_proto_ != config->tx_proto_) {
+    rep_sched_ = rep_frame_->RecreateScheduler();
+    rep_sched_->txn_reg_ = tx_reg_;
+    rep_sched_->loc_id_ = site_info_->locale_id;
+    rep_sched_->site_id_ = site_info_->id;
+    rep_sched_->partition_id_ = site_info_->partition_id_;
+    rep_sched_->tx_sched_ = tx_sched_;
+    tx_sched_->rep_sched_ = rep_sched_;
+    rep_log_svr_.reset(rep_sched_); 
+  }
+  if (rep_sched_ && tx_sched_) {
+    rep_sched_->RegLearnerAction(old_rep_sched_->GetRegLearnerAction());
+  }
+  if (Config::GetConfig()->yaml_config_["lab"]["shard"].as<bool>()) {
+    if (this->site_info_->partition_id_ == 0) {
+      sm_svr_->sp_log_svr_ = rep_log_svr_; 
+      rep_log_svr_->app_next_ = [this](Marshallable& m){
+        sm_svr_->OnNextCommand(m);
+      };
+    } else {
+      shardkv_svr_ = make_shared<ShardKvServer>();
+      shardkv_svr_->sp_log_svr_ = rep_log_svr_;
+      rep_log_svr_->app_next_ = [this](Marshallable& m){
+        shardkv_svr_->OnNextCommand(m);
+      };
+    }
+  } else if (Config::GetConfig()->yaml_config_["lab"]["kv"].as<bool>()) {
+    uint64_t maxraftstate = Config::GetConfig()->yaml_config_["lab"]["maxraftstate"].as<uint64_t>();
+    kv_svr_ = make_shared<KvServer>(maxraftstate);
+    kv_svr_->sp_log_svr_ = rep_log_svr_;
+    rep_log_svr_->app_next_ = [this](Marshallable& m){
+      kv_svr_->OnNextCommand(m);
+    };
+  }
+  for (auto &service : services_) {
+    if (ShardKvServiceImpl* s = dynamic_cast<ShardKvServiceImpl*>(service.get())) {
+      s->sp_svr_ = shardkv_svr_;
+    }
+    if (KvServiceImpl* s = dynamic_cast<KvServiceImpl*>(service.get())) {
+      s->sp_svr_ = kv_svr_;
+    }
+  }
+  if (rep_frame_) {
+    rep_frame_->kv_svr_ = kv_svr_.get();
+    rep_frame_->shardkv_svr_ = shardkv_svr_.get();
+    rep_sched_->commo_ = rep_commo_;
+    rep_commo_->rep_sched_ = rep_sched_;
+  }
+  std::shared_ptr<OneTimeJob> sp_j  = std::make_shared<OneTimeJob>(
+    [this]() { 
+      if (rep_sched_) {
+        rep_sched_->Setup();
+      }
+    }
+  );
+  svr_poll_mgr_->add(sp_j);
+  Log_info("Done with %d", site_info_->id);
+}
+
 void ServerWorker::SetupBase() {
   auto config = Config::GetConfig();
   tx_frame_ = Frame::GetFrame(config->tx_proto_);
@@ -58,11 +129,15 @@ void ServerWorker::SetupBase() {
   if (config->IsReplicated() &&
       config->replica_proto_ != config->tx_proto_) {
     rep_frame_ = Frame::GetFrame(config->replica_proto_);
+    rep_frame_->SetRestart([this](){
+      RestartScheduler();
+    });
     rep_frame_->site_info_ = site_info_;
     rep_sched_ = rep_frame_->CreateScheduler();
     rep_sched_->txn_reg_ = tx_reg_;
     rep_sched_->loc_id_ = site_info_->locale_id;
     rep_sched_->site_id_ = site_info_->id;
+    rep_sched_->partition_id_ = site_info_->partition_id_;
     rep_sched_->tx_sched_ = tx_sched_;
     tx_sched_->rep_frame_ = rep_frame_;
     tx_sched_->rep_sched_ = rep_sched_;
@@ -74,13 +149,34 @@ void ServerWorker::SetupBase() {
                                            tx_sched_,
                                            std::placeholders::_1));
   }
-  auto kv_svr = make_shared<KvServer>();
-  kv_svr_ = kv_svr;
-  kv_svr_->sp_log_svr_ = rep_log_svr_; 
-  verify(kv_svr_->sp_log_svr_);
-  rep_log_svr_->app_next_ = [kv_svr](Marshallable& m){
-    kv_svr->OnNextCommand(m);
-  };
+
+  if (Config::GetConfig()->yaml_config_["lab"]["shard"].as<bool>()) {
+    if (this->site_info_->partition_id_ == 0) {
+      sm_svr_ = make_shared<ShardMasterServiceImpl>();
+      sm_svr_->sp_log_svr_ = rep_log_svr_; 
+      verify(sm_svr_->sp_log_svr_);
+      rep_log_svr_->app_next_ = [this](Marshallable& m){
+        sm_svr_->OnNextCommand(m);
+      };
+    } else {
+      auto sk_svr = make_shared<ShardKvServer>();
+      shardkv_svr_ = sk_svr;
+      shardkv_svr_->sp_log_svr_ = rep_log_svr_; 
+      verify(shardkv_svr_->sp_log_svr_);
+      rep_log_svr_->app_next_ = [sk_svr](Marshallable& m){
+        sk_svr->OnNextCommand(m);
+      };
+    }
+  } else if (Config::GetConfig()->yaml_config_["lab"]["kv"].as<bool>()) {
+    uint64_t maxraftstate = Config::GetConfig()->yaml_config_["lab"]["maxraftstate"].as<uint64_t>();
+    auto kv_svr = make_shared<KvServer>(maxraftstate);
+    kv_svr_ = kv_svr;
+    kv_svr_->sp_log_svr_ = rep_log_svr_; 
+    verify(kv_svr_->sp_log_svr_);
+    rep_log_svr_->app_next_ = [kv_svr](Marshallable& m){
+      kv_svr->OnNextCommand(m);
+    };
+  }
 }
 
 void ServerWorker::PopTable() {
@@ -151,10 +247,14 @@ void ServerWorker::SetupService() {
   // init service implementation
 
   if (tx_frame_ != nullptr) {
-    services_ = tx_frame_->CreateRpcServices(site_info_->id,
+    auto svcs = tx_frame_->CreateRpcServices(site_info_->id,
                                              tx_sched_,
                                              svr_poll_mgr_,
                                              scsi_);
+    for (auto& s: svcs) {
+      verify(s);
+      services_.push_back(shared_ptr<rrr::Service>(s)); 
+    }
   }
 
   if (rep_frame_ != nullptr) {
@@ -162,14 +262,31 @@ void ServerWorker::SetupService() {
                                             rep_sched_,
                                             svr_poll_mgr_,
                                             scsi_);
-
-    services_.insert(services_.end(), s2.begin(), s2.end());
+    for (auto& s: s2) {
+      verify(s);
+      services_.push_back(shared_ptr<rrr::Service>(s)); 
+    }
   }
-
-  auto s = new KvServiceImpl();
-  s->sp_svr_ = kv_svr_;
-  services_.push_back(s);
-
+  if (Config::GetConfig()->yaml_config_["lab"]["shard"].as<bool>()) {
+    if (this->site_info_->partition_id_ == 0) {
+      verify(sm_svr_);
+      services_.push_back(sm_svr_);
+    } else {
+      auto s1 = make_shared<KvServiceImpl>();
+      s1->sp_svr_ = kv_svr_;
+      verify(s1);
+      services_.push_back(s1);
+      auto s2 = make_shared<ShardKvServiceImpl>();
+      s2->sp_svr_ = shardkv_svr_;
+      verify(s2);
+      services_.push_back(s2);
+    }
+  } else if (Config::GetConfig()->yaml_config_["lab"]["kv"].as<bool>()) {
+    auto s1 = make_shared<KvServiceImpl>();
+    s1->sp_svr_ = kv_svr_;
+    verify(s1);
+    services_.push_back(s1);
+  }
 //  auto& alarm = TimeoutALock::get_alarm_s();
 //  ServerWorker::svr_poll_mgr_->add(&alarm);
 
@@ -181,7 +298,7 @@ void ServerWorker::SetupService() {
 
   // reg services
   for (auto service : services_) {
-    rpc_server_->reg(service);
+    rpc_server_->reg(service.get());
   }
 
   // start rpc server
@@ -209,7 +326,7 @@ void ServerWorker::WaitForShutdown() {
       hb_thread_pool_g->release();
 
     for (auto service : services_) {
-      if (DepTranServiceImpl* s = dynamic_cast<DepTranServiceImpl*>(service)) {
+      if (DepTranServiceImpl* s = dynamic_cast<DepTranServiceImpl*>(service.get())) {
         auto& recorder = s->recorder_;
         if (recorder) {
           auto n_flush_avg_ = recorder->stat_cnt_.peek().avg_;
@@ -235,6 +352,8 @@ void ServerWorker::SetupCommo() {
   }
   if (rep_frame_) {
     rep_frame_->kv_svr_ = kv_svr_.get();
+    rep_frame_->shardkv_svr_ = shardkv_svr_.get();
+    rep_frame_->sm_svr_ = sm_svr_.get();
     rep_commo_ = rep_frame_->CreateCommo(svr_poll_mgr_);
     if (rep_commo_) {
       rep_commo_->loc_id_ = site_info_->locale_id;
@@ -252,7 +371,6 @@ void ServerWorker::SetupCommo() {
       }
     }
   );
-  auto sp_job = std::dynamic_pointer_cast<Job>(sp_j);
   svr_poll_mgr_->add(sp_j);
 
 #ifdef RAFT_TEST_CORO
@@ -284,7 +402,7 @@ void ServerWorker::ShutDown() {
   Resume();
   delete rpc_server_;
   for (auto service : services_) {
-    delete service;
+    service.reset();
   }
   delete rep_frame_;
 //  thread_pool_g->release();
